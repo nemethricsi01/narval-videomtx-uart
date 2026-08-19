@@ -1,5 +1,4 @@
 #include "services/videomtx.h"
-#include "drivers/videomtx_ic.h"
 #include "drivers/video_uart.h"
 #include "nvs.h"
 #include "esp_log.h"
@@ -53,9 +52,6 @@ void videomtx_init(void)
     s_save_sem = xSemaphoreCreateBinary();
     xTaskCreate(nvs_save_task, "vmtx_nvs", 2048, NULL, 3, NULL);
 
-    ESP_ERROR_CHECK(videomtx_ic_init());
-    videomtx_ic_write(s_route);  // push the routing table loaded from NVS
-
     ESP_ERROR_CHECK(video_uart_init());
     for (int i = 0; i < VIDEOMTX_SIZE; i++)
         video_uart_send((uint8_t)i, s_route[i]);  // push initial state, one frame per output
@@ -68,7 +64,6 @@ static void do_set(uint8_t output, uint8_t input, bool notify)
     if (output >= VIDEOMTX_SIZE || input >= VIDEOMTX_SIZE) return;
     s_route[output] = input;
     ESP_LOGI(TAG, "out%02d <- in%02d", output + 1, input + 1);
-    videomtx_ic_write(s_route);
     video_uart_send(output, input);
     xSemaphoreGive(s_save_sem);
     if (notify && s_notify_fn) s_notify_fn(output, input);

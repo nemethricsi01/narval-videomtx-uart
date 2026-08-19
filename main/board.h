@@ -39,17 +39,7 @@
 // ---- DS3231 SQW (1 Hz interrupt) ------------------------------------------
 #define BOARD_PIN_RTC_SQW  17
 
-// ---- Video crosspoint switch IC (SPI3, dedicated — no other device on it) -
-#define BOARD_MTX_SPI_HOST        SPI3_HOST
-#define BOARD_MTX_CLOCK_HZ       (1 * 1000 * 1000)  // TODO: confirm against the IC's datasheet
-#define BOARD_PIN_MTX_SCLK        1  // TODO: set to the MTX SCLK GPIO
-#define BOARD_PIN_MTX_MOSI        14  // TODO: set to the MTX MOSI GPIO
-#define BOARD_PIN_MTX_MISO        2  // leave -1 if unwired (device looks write-only)
-#define BOARD_PIN_MTX_CS          47
-#define BOARD_PIN_MTX_UPDATE      8
-#define BOARD_PIN_MTX_RESET       21
-
-// ---- Video routing UART mirror (parallel to the crosspoint IC) ------------
+// ---- Video routing UART output ---------------------------------------------
 // TX-only, one frame per crosspoint change: [0x55][addr][channel][0xAA].
 // UART1 chosen deliberately (not UART0) — this project doesn't open any
 // UART itself, but UART0 may be claimed by the system console depending on

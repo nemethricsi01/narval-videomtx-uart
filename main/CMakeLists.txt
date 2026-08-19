@@ -5,7 +5,6 @@ idf_component_register(
         "drivers/twai_can.c"
         "drivers/encoder.c"
         "drivers/ws2812.c"
-        "drivers/videomtx_ic.c"
         "drivers/video_uart.c"
         "services/display.c"
         "services/can.c"
