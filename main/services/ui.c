@@ -4,8 +4,11 @@
 #include "services/can_monitor.h"
 #include "services/videomtx.h"
 #include "services/can_latest.h"
+#include "services/bmd_status.h"
 #include "drivers/encoder.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -16,14 +19,15 @@ static const char *TAG = "ui";
 // ---------------------------------------------------------------------------
 
 typedef enum {
+    SCREEN_SPLASH,
     SCREEN_MAIN,
     SCREEN_MENU,
     SCREEN_BRIGHTNESS,
     SCREEN_CAN_MONITOR,
-    SCREEN_CAN_SETTINGS,
+    SCREEN_BMD_STATUS,
 } ui_screen_t;
 
-static ui_screen_t  s_current_screen = SCREEN_MAIN;
+static ui_screen_t  s_current_screen = SCREEN_SPLASH;
 static lv_indev_t  *s_enc_indev      = NULL;
 
 // Groups
@@ -66,8 +70,18 @@ static char      s_can_log_text[CAN_MON_LOG_SIZE * CAN_MON_LINE_MAX];
 // Restored to true by encoder click (insert separator) or screen entry.
 static bool      s_can_follow = true;
 
-// CAN Settings screen
-static lv_obj_t *s_can_settings_scr = NULL;
+// BMD Status screen
+static lv_obj_t *s_bmd_scr           = NULL;
+static lv_obj_t *s_bmd_ip_label      = NULL;
+static lv_obj_t *s_bmd_online_label  = NULL;
+
+// BMD status hint on the main screen (below "nyomva: menu")
+static lv_obj_t *s_bmd_main_label    = NULL;
+
+// Splash screen (shown at boot; see build_splash_screen())
+static lv_obj_t *s_splash_scr          = NULL;
+static lv_obj_t *s_splash_status_label = NULL;
+static lv_obj_t *s_splash_ip_label     = NULL;
 
 // Single rotation accumulator: 2 raw CW/CCW events = 1 detent = 1 step.
 // Reset on every screen transition so there is never leftover state.
@@ -131,8 +145,9 @@ static void group_click(lv_group_t *g)
 
 static void ui_show_brightness(void);
 static void ui_open_can_monitor(void);
-static void ui_open_can_settings(void);
+static void ui_open_bmd_status(void);
 static void can_monitor_refresh(void);
+static void bmd_ui_refresh(void);
 
 // ---------------------------------------------------------------------------
 // Event callbacks
@@ -146,9 +161,9 @@ static void on_menu_select(lv_event_t *e)
     int idx = (int)(intptr_t)lv_obj_get_user_data(btn);
 
     switch (idx) {
-    case 0: ui_show_brightness();   break;
-    case 1: ui_open_can_monitor();  break;
-    case 2: ui_open_can_settings(); break;
+    case 0: ui_show_brightness();  break;
+    case 1: ui_open_can_monitor(); break;
+    case 2: ui_open_bmd_status();  break;
     default: {
         const char *text = lv_list_get_button_text(lv_obj_get_parent(btn), btn);
         lv_label_set_text(s_status_label, text);
@@ -160,7 +175,7 @@ static void on_menu_select(lv_event_t *e)
 static const char *s_menu_items[] = {
     LV_SYMBOL_IMAGE    " Brightness",
     LV_SYMBOL_WARNING  " CAN Monitor",
-    LV_SYMBOL_SETTINGS " CAN Settings",
+    LV_SYMBOL_WIFI     " BMD Status",
 };
 
 // ---------------------------------------------------------------------------
@@ -170,7 +185,7 @@ static const char *s_menu_items[] = {
 static void mtx_cell_refresh(int out)
 {
     char buf[24];
-    snprintf(buf, sizeof(buf), "Ki %02d < Be%02d", out + 1, s_mtx_route[out] + 1);
+    snprintf(buf, sizeof(buf), "Ki %02d < Be %02d", out + 1, s_mtx_route[out] + 1);
     lv_label_set_text(s_mtx_labels[out], buf);
 
     bool sel     = (out == s_mtx_sel);
@@ -256,19 +271,19 @@ static void build_main_screen(void)
     lv_obj_set_style_text_color(s_mtx_overlay_lbl, lv_color_white(), 0);
     lv_obj_align(s_mtx_overlay_lbl, LV_ALIGN_CENTER, 0, 0);
 
-    // Hint labels in col 2, rows 4-5 (unused slots)
+    // Hint + BMD status in col 2, rows 4-5 (unused slots)
 
     lv_obj_t *hint1 = lv_label_create(s_main_scr);
-    lv_obj_set_style_text_font(hint1, &lv_font_montserrat_16, 0);
+    lv_obj_set_style_text_font(hint1, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(hint1, lv_color_white(), 0);
-    lv_label_set_text(hint1, "nyomva:");
-    lv_obj_set_pos(hint1, 2 * 106 + 3, 14 + 4 * 26 + 6);
+    lv_label_set_text(hint1, "nyomva:\nmenu");
+    lv_obj_set_pos(hint1, 2 * 106 + 3, 14 + 4 * 26);
 
-    lv_obj_t *hint2 = lv_label_create(s_main_scr);
-    lv_obj_set_style_text_font(hint2, &lv_font_montserrat_16, 0);
-    lv_obj_set_style_text_color(hint2, lv_color_white(), 0);
-    lv_label_set_text(hint2, "menu");
-    lv_obj_set_pos(hint2, 2 * 106 + 3, 14 + 5 * 26 + 6);
+    s_bmd_main_label = lv_label_create(s_main_scr);
+    lv_obj_set_style_text_font(s_bmd_main_label, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(s_bmd_main_label, lv_color_white(), 0);
+    lv_label_set_text(s_bmd_main_label, "BMD: --");
+    lv_obj_set_pos(s_bmd_main_label, 2 * 106 + 3, 14 + 4 * 26 + 34);
 
     for (int i = 0; i < MTX_SIZE; i++)
         mtx_cell_refresh(i);
@@ -375,24 +390,109 @@ static void build_can_monitor_screen(void)
     lv_label_set_text_static(s_can_log, "Waiting for CAN frames...");
 }
 
-static void build_can_settings_screen(void)
+static void build_bmd_status_screen(void)
 {
-    s_can_settings_scr = lv_obj_create(NULL);
+    s_bmd_scr = lv_obj_create(NULL);
 
-    lv_obj_t *title = lv_label_create(s_can_settings_scr);
+    lv_obj_t *title = lv_label_create(s_bmd_scr);
     lv_obj_set_style_text_font(title, &lv_font_montserrat_14, 0);
-    lv_label_set_text(title, LV_SYMBOL_SETTINGS " CAN Settings");
+    lv_label_set_text(title, LV_SYMBOL_WIFI " BMD Status");
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 4);
 
-    lv_obj_t *addr = lv_label_create(s_can_settings_scr);
-    lv_obj_set_style_text_font(addr, &lv_font_montserrat_20, 0);
-    lv_label_set_text(addr, "CAN Address: --");
-    lv_obj_align(addr, LV_ALIGN_CENTER, 0, -10);
+    s_bmd_ip_label = lv_label_create(s_bmd_scr);
+    lv_obj_set_style_text_font(s_bmd_ip_label, &lv_font_montserrat_20, 0);
+    lv_label_set_text(s_bmd_ip_label, "IP: --");
+    lv_obj_align(s_bmd_ip_label, LV_ALIGN_CENTER, 0, -10);
 
-    lv_obj_t *hint = lv_label_create(s_can_settings_scr);
+    s_bmd_online_label = lv_label_create(s_bmd_scr);
+    lv_obj_set_style_text_font(s_bmd_online_label, &lv_font_montserrat_20, 0);
+    lv_label_set_text(s_bmd_online_label, "--");
+    lv_obj_align(s_bmd_online_label, LV_ALIGN_CENTER, 0, 20);
+
+    lv_obj_t *hint = lv_label_create(s_bmd_scr);
     lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, 0);
     lv_label_set_text(hint, "Long-press: back");
     lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -4);
+}
+
+// Updates the main-screen hint and the BMD Status submenu from the latest
+// bmd_status service state. Registered as the service's notify callback, so
+// it runs in the LVGL task and may touch LVGL objects freely.
+static void bmd_ui_refresh(void)
+{
+    bool has_data = bmd_status_has_data();
+    bool online   = bmd_status_is_online();
+
+    lv_color_t color = !has_data ? lv_palette_main(LV_PALETTE_PURPLE)
+                      : online   ? lv_palette_main(LV_PALETTE_LIME)
+                      :            lv_palette_main(LV_PALETTE_AMBER);
+
+    char main_buf[24];
+    snprintf(main_buf, sizeof(main_buf), "BMD: %s",
+             !has_data ? "--" : online ? "online" : "offline");
+    lv_label_set_text(s_bmd_main_label, main_buf);
+    lv_obj_set_style_text_color(s_bmd_main_label, color, 0);
+
+    char ip_str[16];
+    bmd_status_get_ip_str(ip_str, sizeof(ip_str));
+    char ip_buf[24];
+    snprintf(ip_buf, sizeof(ip_buf), "IP: %s", has_data ? ip_str : "--");
+    lv_label_set_text(s_bmd_ip_label, ip_buf);
+
+    lv_label_set_text(s_bmd_online_label, !has_data ? "--" : online ? "ONLINE" : "OFFLINE");
+    lv_obj_set_style_text_color(s_bmd_online_label, color, 0);
+
+    // Splash screen: black text on its white box regardless of status.
+    lv_label_set_text(s_splash_status_label,
+                       !has_data ? "---" : online ? "online" : "offline");
+    char splash_ip_buf[24];
+    snprintf(splash_ip_buf, sizeof(splash_ip_buf), "BMD ip: %s", has_data ? ip_str : "--");
+    lv_label_set_text(s_splash_ip_label, splash_ip_buf);
+}
+
+// Boot splash: black screen, centered "NARVAL SYSTEMS" / "BMD controller" up
+// top, then a full-width white box flush with the bottom of the screen
+// holding (inverted) BMD status + IP, filled in by bmd_ui_refresh().
+static void build_splash_screen(void)
+{
+    s_splash_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_splash_scr, lv_color_black(), 0);
+    lv_obj_set_style_pad_all(s_splash_scr, 0, 0);
+    lv_obj_set_scrollbar_mode(s_splash_scr, LV_SCROLLBAR_MODE_OFF);
+
+    lv_obj_t *title = lv_label_create(s_splash_scr);
+    lv_obj_set_style_text_font(title, &lv_font_montserrat_26, 0);
+    lv_obj_set_style_text_color(title, lv_color_white(), 0);
+    lv_label_set_text(title, "NARVAL SYSTEMS");
+    lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 18);
+
+    lv_obj_t *subtitle = lv_label_create(s_splash_scr);
+    lv_obj_set_style_text_font(subtitle, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(subtitle, lv_color_white(), 0);
+    lv_label_set_text(subtitle, "BMD controller");
+    lv_obj_align(subtitle, LV_ALIGN_TOP_MID, 0, 54);
+
+    lv_obj_t *box = lv_obj_create(s_splash_scr);
+    lv_obj_set_size(box, LV_PCT(100), 64);
+    lv_obj_align(box, LV_ALIGN_BOTTOM_MID, 0, 0);
+    lv_obj_set_style_bg_color(box, lv_color_white(), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, 0, 0);
+    lv_obj_set_style_pad_all(box, 0, 0);
+    lv_obj_set_scrollbar_mode(box, LV_SCROLLBAR_MODE_OFF);
+
+    s_splash_status_label = lv_label_create(box);
+    lv_obj_set_style_text_font(s_splash_status_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_splash_status_label, lv_color_black(), 0);
+    lv_label_set_text(s_splash_status_label, "---");
+    lv_obj_align(s_splash_status_label, LV_ALIGN_TOP_MID, 0, 8);
+
+    s_splash_ip_label = lv_label_create(box);
+    lv_obj_set_style_text_font(s_splash_ip_label, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_splash_ip_label, lv_color_black(), 0);
+    lv_label_set_text(s_splash_ip_label, "BMD ip: --");
+    lv_obj_align(s_splash_ip_label, LV_ALIGN_BOTTOM_MID, 0, -8);
 }
 
 // ---------------------------------------------------------------------------
@@ -447,12 +547,13 @@ static void ui_open_can_monitor(void)
     lv_screen_load(s_can_scr);
 }
 
-static void ui_open_can_settings(void)
+static void ui_open_bmd_status(void)
 {
     s_enc_accum = 0;
-    s_current_screen = SCREEN_CAN_SETTINGS;
+    s_current_screen = SCREEN_BMD_STATUS;
     lv_indev_set_group(s_enc_indev, s_empty_group);
-    lv_screen_load(s_can_settings_scr);
+    bmd_ui_refresh();
+    lv_screen_load(s_bmd_scr);
 }
 
 // ---------------------------------------------------------------------------
@@ -465,6 +566,9 @@ void ui_encoder_event(void *arg)
     int step = accum_step(event);
 
     switch (s_current_screen) {
+
+    case SCREEN_SPLASH:
+        break; // inert during the boot splash — s_empty_group already blocks focus nav
 
     case SCREEN_MAIN:
         if (step != 0) {
@@ -533,7 +637,7 @@ void ui_encoder_event(void *arg)
         }
         break;
 
-    case SCREEN_CAN_SETTINGS:
+    case SCREEN_BMD_STATUS:
         if (event == ENCODER_LONG) ui_show_menu();
         break;
     }
@@ -581,23 +685,45 @@ esp_err_t ui_init(lv_indev_t *encoder_indev, const settings_t *s)
     build_menu_screen();
     build_brightness_screen();
     build_can_monitor_screen();
-    build_can_settings_screen();
+    build_bmd_status_screen();
+    build_splash_screen();
 
-    display_set_brightness((uint8_t)s_brightness_pct);
-    ESP_LOGI(TAG, "brightness set to %d%%", s_brightness_pct);
-    brightness_refresh();
-
-    s_current_screen = SCREEN_MAIN;
-    lv_indev_set_group(s_enc_indev, s_empty_group);
-    lv_screen_load(s_main_scr);
-
-    // Re-apply brightness from the LVGL task on the first rendered frame.
-    // Guards against any timing issue that prevents the direct call above
-    // from taking effect before the first lv_timer_handler() run.
-    lv_async_call(brightness_init_cb, NULL);
-
+    // Register notifications before the splash starts, so a BMD status frame
+    // (or a CAN/route change) arriving during the splash sequence still
+    // updates the already-built-but-not-yet-visible target screens live,
+    // instead of only taking effect once the user navigates there later.
     can_mon_set_notify(can_monitor_refresh);
     videomtx_set_notify(mtx_external_notify);
+    bmd_status_set_notify(bmd_ui_refresh);
+    bmd_ui_refresh();
+
+    s_current_screen = SCREEN_SPLASH;
+    lv_indev_set_group(s_enc_indev, s_empty_group);
+    lv_screen_load(s_splash_scr);
+
+    // Splash choreography: 2 s dim up, 3 s hold, 1 s dim down, swap to the
+    // matrix screen while dark, then 1 s dim up over it. Each fade/delay
+    // blocks, so release the LVGL lock around them — otherwise the LVGL
+    // task can't render anything (including the splash we just loaded)
+    // until the whole sequence finishes.
+    display_unlock();
+    display_fade(0, (uint8_t)s_brightness_pct, 2000);
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    display_fade((uint8_t)s_brightness_pct, 0, 1000);
+    display_lock();
+
+    s_current_screen = SCREEN_MAIN;
+    lv_screen_load(s_main_scr);
+
+    display_unlock();
+    display_fade(0, (uint8_t)s_brightness_pct, 1000);
+    display_lock();
+    ESP_LOGI(TAG, "splash done, brightness at %d%%", s_brightness_pct);
+
+    // Re-apply brightness from the LVGL task on the first rendered frame.
+    // Guards against any timing issue that prevents the fade above from
+    // taking effect before the first lv_timer_handler() run.
+    lv_async_call(brightness_init_cb, NULL);
 
     ESP_LOGI(TAG, "UI initialized");
     return ESP_OK;

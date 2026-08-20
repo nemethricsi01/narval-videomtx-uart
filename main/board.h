@@ -28,13 +28,20 @@
 #define BOARD_PIN_ETH_MISO        13
 #define BOARD_PIN_ETH_SCLK        12
 #define BOARD_PIN_ETH_CS          10
-#define BOARD_PIN_ETH_RST          9
 // Locally-administered MAC (W5500 modules often ship without a factory MAC)
 #define BOARD_ETH_MAC             {0x02, 0xAB, 0xCD, 0x12, 0x34, 0x56}
 
 // ---- TWAI (CAN) -----------------------------------------------------------
 #define BOARD_PIN_CAN_RX          15
 #define BOARD_PIN_CAN_TX          16
+
+// ---- BMD status UART input --------------------------------------------------
+// RX-only, one frame per status update: [0xAA][ip4][ip3][ip2][ip1][status][0x55].
+// GPIO9 was BOARD_PIN_ETH_RST — the W5500 Ethernet driver was never wired up
+// in this firmware, so the pin was repurposed here.
+#define BOARD_BMD_UART_PORT       UART_NUM_2
+#define BOARD_BMD_UART_BAUD       115200
+#define BOARD_PIN_BMD_UART_RX      9
 
 // ---- DS3231 SQW (1 Hz interrupt) ------------------------------------------
 #define BOARD_PIN_RTC_SQW  17

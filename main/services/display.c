@@ -58,10 +58,32 @@ static void ledc_bl_init(void)
 void display_set_brightness(uint8_t pct)
 {
     if (pct > 100) pct = 100;
-    
+
     uint32_t duty = (uint32_t)pct * pct * 255 / 10000;
     ledc_set_duty(LEDC_MODE, LEDC_CHANNEL, duty);
     ledc_update_duty(LEDC_MODE, LEDC_CHANNEL);
+}
+
+#define FADE_STEP_MS  20  // ~50 steps/sec — smooth without spamming LEDC updates
+
+void display_fade(uint8_t from_pct, uint8_t to_pct, uint32_t duration_ms)
+{
+    if (from_pct > 100) from_pct = 100;
+    if (to_pct   > 100) to_pct   = 100;
+    if (duration_ms == 0) {
+        display_set_brightness(to_pct);
+        return;
+    }
+
+    uint32_t steps = duration_ms / FADE_STEP_MS;
+    if (steps == 0) steps = 1;
+
+    for (uint32_t i = 1; i <= steps; i++) {
+        int32_t pct = (int32_t)from_pct + ((int32_t)to_pct - from_pct) * (int32_t)i / (int32_t)steps;
+        display_set_brightness((uint8_t)pct);
+        vTaskDelay(pdMS_TO_TICKS(FADE_STEP_MS));
+    }
+    display_set_brightness(to_pct); // land exactly on target regardless of rounding
 }
 
 // ---------------------------------------------------------------------------

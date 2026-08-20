@@ -13,6 +13,7 @@
 #include "services/usb_bridge.h"
 #include "services/prog.h"
 #include "services/videomtx.h"
+#include "services/bmd_status.h"
 #include "drivers/twai_can.h"
 #include "drivers/encoder.h"
 #include "drivers/ws2812.h"
@@ -61,6 +62,7 @@ void app_main(void)
     can_mon_init();    // must be before any task that calls can_mon_push
     can_latest_init(); // must be before any task that calls can_latest_update
     videomtx_init();
+    ESP_ERROR_CHECK(bmd_status_init());
 
     twai_node_handle_t can_node = NULL;
     ESP_ERROR_CHECK(twai_can_init(&can_node));
@@ -75,6 +77,8 @@ void app_main(void)
     ESP_ERROR_CHECK(encoder_init(on_encoder_event, NULL));
 
     // Blink WS2812 5x white at power-up
+    // Disabled for now — the splash screen already signals startup on the LCD.
+    /*
     if (ws2812_init(BOARD_PIN_WS2812) == ESP_OK) {
         for (int i = 0; i < 3; i++) {
             ws2812_set(128, 128, 128);
@@ -85,6 +89,7 @@ void app_main(void)
         ws2812_set(0, 32, 0);
         ws2812_deinit();
     }
+    */
 
     lv_display_t *disp = NULL;
     ESP_ERROR_CHECK(display_init(&disp));

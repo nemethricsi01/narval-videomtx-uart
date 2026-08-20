@@ -149,15 +149,43 @@ void can_latest_configure(void)
         }
         else if (mode == MODE_6STEP || mode == MODE_6STEP_SECONDARY)
         {
-            for (uint8_t row = 0; row < 16 && s_cols[col].len < 6; row++) // loop rows until we have 6 states for this column
-            {
-                uint8_t color = matrix_get_cell(matrix, row, col);
-                if (color > 0)
-                {
-                    s_cols[col].rows[s_cols[col].len] = row;
-                    s_cols[col].led_order[s_cols[col].len++] = color - 1;
-                }
+            // Six-step cells encode button group AND color in one value (5..10):
+            //   5,6,7  -> button A, color (v-5)%3 = Green/Red/Yellow
+            //   8,9,10 -> button B, color (v-5)%3 = Green/Red/Yellow
+            // (v-5) already lands in 0..5, matching the fixed slot layout this
+            // struct expects ([0..2]=button A G/R/Y, [3..5]=button B G/R/Y), so
+            // the raw value maps straight to its slot. This replaces inferring
+            // the button group from row-scan position (first 3 hits = A, next
+            // 3 = B), which broke as soon as a column's rows weren't laid out
+            // with all of button A's cells scanned before button B's.
+            //
+            // led_order is the actual on-wire LED code, and this codebase
+            // reserves 0 for OFF — real colors are 1=Green, 2=Red, 3=Yellow
+            // (see color_names below and MODE_NORMAL's `color - 1`). (v-5)%3
+            // only yields 0..2, so it needs +1 to land on a real color code;
+            // without it, "green" silently sent the OFF code and "yellow"
+            // was never reachable at all.
+            for (uint8_t i = 0; i < 6; i++) {
+                s_cols[col].rows[i]      = 0xFF; // sentinel: slot not configured
+                s_cols[col].led_order[i] = 0;
             }
+            bool any = false;
+            for (uint8_t row = 0; row < 16; row++)
+            {
+                uint8_t v = matrix_get_cell(matrix, row, col);
+                if (v == 0) continue;
+                if (v < 5 || v > 10) {
+                    ESP_LOGW(TAG, "col %d row %d: value %d out of 6step range, skipped", col, row, v);
+                    continue;
+                }
+                uint8_t slot = v - 5; // 0..5
+                s_cols[col].rows[slot]      = row;
+                s_cols[col].led_order[slot] = (slot % 3) + 1; // 1=Green 2=Red 3=Yellow
+                any = true;
+            }
+            // len stays 0 (set at the top of this loop) for an unused column —
+            // only claim the fixed 6-slot layout once it actually has cells.
+            if (any) s_cols[col].len = 6;
         }
         else if (mode == MODE_RADIO_GREEN || mode == MODE_RADIO_RED)
         {

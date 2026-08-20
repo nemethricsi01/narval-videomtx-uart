@@ -25,3 +25,13 @@ void display_unlock(void);
  * @param percent  0–100; applied on a quadratic (gamma-2) curve.
  */
 void display_set_brightness(uint8_t percent);
+
+/**
+ * Ramp the backlight from from_pct to to_pct over duration_ms.
+ * Steps `percent` linearly in time and lets display_set_brightness()'s
+ * gamma curve turn that into a perceptually-linear fade. Blocking
+ * (vTaskDelay-based) — call only while NOT holding the LVGL lock, so the
+ * LVGL task can keep rendering while the backlight moves. Intended for
+ * startup/splash dim sequences.
+ */
+void display_fade(uint8_t from_pct, uint8_t to_pct, uint32_t duration_ms);
